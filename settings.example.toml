@@ -1,0 +1,9 @@
+wiki_url = "https://www.confluence.org/wiki"
+username = "admin"
+password = "adminpass"
+
+[db]
+database = "database_name"
+host = "127.0.0.1"
+username = "postgres_ro"
+password = "securepass123"
