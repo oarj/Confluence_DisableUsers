@@ -1,12 +1,4 @@
-use clap::Parser;
 use serde::{Deserialize, Serialize};
-
-#[derive(Parser)]
-#[command(author, version, about, long_about = None)]
-pub struct Args {
-    #[arg(short, long, required = true)]
-    pub file: String,
-}
 
 #[derive(Deserialize, Serialize)]
 pub struct DBConfig {

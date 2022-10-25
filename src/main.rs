@@ -1,10 +1,8 @@
 mod config;
 mod confluence;
 
-use crate::config::{Args, Config};
+use crate::config::Config;
 
-use clap::Parser;
-use tokio::fs;
 use tokio_postgres::{Client, NoTls};
 
 use figment::{
@@ -19,8 +17,7 @@ async fn check_user_active(user: &str, db_client: &Client) -> bool {
         .await;
 
     match row {
-        Ok(r) => match r {
-            Some(r) => {
+        Ok(r) => match r {Some(r) => {
                 let status: &str = r.get("active");
                 match status {
                     // User is not disabled.
@@ -47,8 +44,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .merge(Toml::file("settings.toml"))
         .extract()?;
 
-    let args = Args::parse();
-
     // Create a new HTTP client, the client will also store cookies. This allows the client to be authenticated for future requests.
     let client = reqwest::Client::builder()
         .user_agent("Confluence-CLI")
@@ -58,11 +53,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Perform login and websudo auth.
     confluence::login(&client, &cfg).await?;
     confluence::websudo(&client, &cfg).await?;
-
-    // load users from file
-    let users = fs::read_to_string(args.file).await?;
-    let total_users = users.trim().lines().count();
-    println!("Loaded {} users.", total_users);
 
     // format connection flags for postgres
     let conn_config = format!(
@@ -80,9 +70,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
+    // get inactive users from SQL query
+    let user_rows = db_client.query("
+with users as
+	(
+	select cu.lower_user_name, count(cu.lower_user_name) user_count
+	from cwd_user cu
+	join cwd_directory cd on cd.id = cu.directory_id
+	group by lower_user_name
+	)
+select distinct(cu.lower_user_name) as username
+from logininfo li
+join user_mapping um on li.username = um.user_key
+join cwd_user cu on cu.user_name = um.username
+join cwd_directory cd on cd.id = cu.directory_id
+inner join users u on u.lower_user_name = cu.lower_user_name
+where cu.active = 'T' and cu.lower_user_name != 'admin' and cd.lower_directory_name = 'confluence internal directory'
+and (li.successdate < (current_date - integer '1825') or li.successdate is null) and cu.created_date < (current_date - integer '1825')
+and u.user_count = 1
+", &[]).await?;
+
     let mut disabled_users_count = 0;
-    for user in users.lines() {
-        // If user is active, try to disable it.
+    for row in user_rows.iter() {
+        let user = row.get::<&str, &str>("username");
         if check_user_active(user, &db_client).await {
             confluence::disable_user(&client, &cfg, user).await?;
             // Check if user actually got disabled, this is done because confluence doesn't
@@ -100,7 +110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    println!("Disabled {}/{} users.", disabled_users_count, total_users);
+    println!("Disabled {}/{} users.", disabled_users_count, user_rows.len());
 
     Ok(())
 }
